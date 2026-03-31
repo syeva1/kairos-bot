@@ -15,41 +15,31 @@ TG_CHAT = os.environ.get("TG_CHAT_ID", "")
 TODOIST_API = "https://api.todoist.com/api/v1"
 TG_API = f"https://api.telegram.org/bot{TG_BOT}"
 
-REMINDER_HOURS = list(range(8, 23))  # 8:00 — 22:00
-REMINDER_INTERVAL = 3600  # каждый час
+REMINDER_HOURS = list(range(8, 23))
+REMINDER_INTERVAL = 3600
+
+PRIORITY_EMOJI = {4: "🔴", 3: "🟠", 2: "🟡", 1: "⚪️"}
+PROJECT_EMOJI = {"ИИ": "🤖", "Саморазвитие": "📚", "Работа": "💼", "Inbox": "📥"}
 
 
 def tg_send(text, buttons=None, chat_id=TG_CHAT):
-    data = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if buttons:
         data["reply_markup"] = json.dumps({"inline_keyboard": buttons})
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/sendMessage", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/sendMessage", data=body,
+        headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read())
 
 
 def tg_edit(chat_id, message_id, text, buttons=None):
-    data = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
+    data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
     if buttons:
         data["reply_markup"] = json.dumps({"inline_keyboard": buttons})
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/editMessageText", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/editMessageText", data=body,
+        headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req) as r:
             return json.loads(r.read())
@@ -60,122 +50,248 @@ def tg_edit(chat_id, message_id, text, buttons=None):
 def tg_answer_callback(callback_id, text=""):
     data = {"callback_query_id": callback_id, "text": text}
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/answerCallbackQuery", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/answerCallbackQuery", data=body,
+        headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req)
     except:
         pass
 
 
-def todoist_get_tasks():
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks",
-        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"}
-    )
+def todoist_get_projects():
+    req = urllib.request.Request(f"{TODOIST_API}/projects",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
     with urllib.request.urlopen(req) as r:
         data = json.loads(r.read())
+    if isinstance(data, dict):
+        return data.get("results", [])
+    return data
 
+
+def todoist_get_tasks(project_id=None):
+    url = f"{TODOIST_API}/tasks"
+    if project_id:
+        url += f"?project_id={project_id}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
+    with urllib.request.urlopen(req) as r:
+        data = json.loads(r.read())
+    return data.get("results", [])
+
+
+def todoist_get_urgent_tasks():
+    req = urllib.request.Request(f"{TODOIST_API}/tasks",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
+    with urllib.request.urlopen(req) as r:
+        data = json.loads(r.read())
     today = str(date.today())
     tasks = data.get("results", [])
     result = {"overdue": [], "today": []}
-
     for t in tasks:
         due = t.get("due")
         if due and due.get("date"):
             d = due["date"]
             if not t.get("is_completed"):
+                item = {"id": t["id"], "content": t["content"],
+                        "priority": t.get("priority", 1), "project_id": t.get("project_id", "")}
                 if d < today:
-                    result["overdue"].append({"id": t["id"], "content": t["content"], "priority": t.get("priority", 1)})
+                    result["overdue"].append(item)
                 elif d == today:
-                    result["today"].append({"id": t["id"], "content": t["content"], "priority": t.get("priority", 1)})
+                    result["today"].append(item)
     return result
 
 
 def todoist_close(task_id):
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks/{task_id}/close", method="POST",
-        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"}
-    )
+    req = urllib.request.Request(f"{TODOIST_API}/tasks/{task_id}/close", method="POST",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
     urllib.request.urlopen(req)
 
 
-def todoist_create(content, due_date=None, priority=1):
+def todoist_create(content, due_date=None, priority=1, project_id=None):
     data = {"content": content, "priority": priority}
     if due_date:
         data["due_date"] = due_date
+    if project_id:
+        data["project_id"] = project_id
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks", data=body, method="POST",
-        headers={
-            "Authorization": f"Bearer {TODOIST_TOKEN}",
-            "Content-Type": "application/json"
-        }
-    )
+    req = urllib.request.Request(f"{TODOIST_API}/tasks", data=body, method="POST",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read())
 
 
-PRIORITY_EMOJI = {4: "🔴", 3: "🟠", 2: "🟡", 1: "⚪️"}
+# --- Главное меню ---
 
+def send_main_menu(chat_id=TG_CHAT):
+    try:
+        projects = todoist_get_projects()
+        urgent = todoist_get_urgent_tasks()
+        urgent_count = len(urgent["overdue"]) + len(urgent["today"])
+    except:
+        projects = []
+        urgent_count = 0
 
-def build_task_message(tasks):
     lines = ["🧠 <b>KAIROS</b>\n"]
+
+    if urgent_count > 0:
+        lines.append(f"⚠️ <b>{urgent_count} срочных задач</b>\n")
+    else:
+        lines.append("✅ Нет срочных задач\n")
+
+    lines.append("Выбери проект:")
+
+    buttons = []
+    for p in projects:
+        emoji = PROJECT_EMOJI.get(p["name"], "📁")
+        buttons.append([{"text": f"{emoji} {p['name']}", "callback_data": f"project:{p['id']}"}])
+
+    buttons.append([
+        {"text": "🔥 Срочные", "callback_data": "urgent"},
+        {"text": "➕ Новая задача", "callback_data": "new_task"}
+    ])
+
+    tg_send("\n".join(lines), buttons, chat_id)
+
+
+# --- Список задач проекта ---
+
+def send_project_tasks(chat_id, msg_id, project_id, project_name=""):
+    try:
+        all_tasks = todoist_get_tasks(project_id)
+    except Exception as e:
+        tg_edit(chat_id, msg_id, f"Ошибка: {e}")
+        return
+
+    tasks = [t for t in all_tasks if not t.get("is_completed")]
+
+    emoji = PROJECT_EMOJI.get(project_name, "📁")
+    lines = [f"{emoji} <b>{project_name}</b>\n"]
+    buttons = []
+
+    if not tasks:
+        lines.append("Задач нет 🎉")
+    else:
+        for t in tasks:
+            p_emoji = PRIORITY_EMOJI.get(t.get("priority", 1), "⚪️")
+            due = t.get("due")
+            date_str = ""
+            if due and due.get("date"):
+                d = due["date"]
+                today = str(date.today())
+                if d < today:
+                    date_str = f" <i>(просрочено!)</i>"
+                elif d == today:
+                    date_str = f" <i>(сегодня)</i>"
+                else:
+                    date_str = f" <i>(до {d})</i>"
+            lines.append(f"  {p_emoji} {t['content']}{date_str}")
+            buttons.append([
+                {"text": f"✅ {t['content'][:30]}", "callback_data": f"done:{t['id']}:{project_id}"}
+            ])
+
+    buttons.append([
+        {"text": f"➕ Добавить в {project_name}", "callback_data": f"new_in:{project_id}:{project_name}"},
+    ])
+    buttons.append([
+        {"text": "⬅️ Назад", "callback_data": "back_menu"},
+        {"text": "🔄 Обновить", "callback_data": f"project:{project_id}"}
+    ])
+
+    tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
+
+
+# --- Срочные задачи ---
+
+def send_urgent(chat_id, msg_id):
+    try:
+        tasks = todoist_get_urgent_tasks()
+        projects = {p["id"]: p["name"] for p in todoist_get_projects()}
+    except Exception as e:
+        tg_edit(chat_id, msg_id, f"Ошибка: {e}")
+        return
+
+    lines = ["🔥 <b>Срочные задачи</b>\n"]
     buttons = []
 
     if tasks["overdue"]:
         lines.append("🔴 <b>ПРОСРОЧЕНО:</b>\n")
         for t in tasks["overdue"]:
-            emoji = PRIORITY_EMOJI.get(t["priority"], "⚪️")
-            lines.append(f"  {emoji} {t['content']}")
-            buttons.append([
-                {"text": f"✅ {t['content'][:30]}", "callback_data": f"done:{t['id']}"}
-            ])
+            p_emoji = PRIORITY_EMOJI.get(t["priority"], "⚪️")
+            proj = projects.get(t["project_id"], "")
+            proj_str = f" [{proj}]" if proj else ""
+            lines.append(f"  {p_emoji} {t['content']}{proj_str}")
+            buttons.append([{"text": f"✅ {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
         lines.append("")
 
     if tasks["today"]:
         lines.append("🟡 <b>СЕГОДНЯ:</b>\n")
         for t in tasks["today"]:
-            emoji = PRIORITY_EMOJI.get(t["priority"], "⚪️")
-            lines.append(f"  {emoji} {t['content']}")
-            buttons.append([
-                {"text": f"✅ {t['content'][:30]}", "callback_data": f"done:{t['id']}"}
-            ])
+            p_emoji = PRIORITY_EMOJI.get(t["priority"], "⚪️")
+            proj = projects.get(t["project_id"], "")
+            proj_str = f" [{proj}]" if proj else ""
+            lines.append(f"  {p_emoji} {t['content']}{proj_str}")
+            buttons.append([{"text": f"✅ {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
+
+    if not tasks["overdue"] and not tasks["today"]:
+        lines.append("✅ Всё выполнено! 💪")
 
     buttons.append([
-        {"text": "➕ Новая задача", "callback_data": "new_task"},
-        {"text": "🔄 Обновить", "callback_data": "refresh"}
+        {"text": "⬅️ Назад", "callback_data": "back_menu"},
+        {"text": "🔄 Обновить", "callback_data": "urgent"}
     ])
 
-    return "\n".join(lines), buttons
+    tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
 
 
-def send_task_list():
-    tasks = todoist_get_tasks()
+# --- Напоминание (каждый час) ---
+
+def send_reminder():
+    tasks = todoist_get_urgent_tasks()
     if not tasks["overdue"] and not tasks["today"]:
-        tg_send("✅ <b>Все задачи выполнены!</b>\n\nТак держать 💪")
         return
-    text, buttons = build_task_message(tasks)
-    tg_send(text, buttons)
+
+    count = len(tasks["overdue"]) + len(tasks["today"])
+    lines = [f"🧠 <b>KAIROS — {time.strftime('%H:%M')}</b>\n"]
+
+    if tasks["overdue"]:
+        lines.append("🔴 <b>ПРОСРОЧЕНО:</b>\n")
+        for t in tasks["overdue"]:
+            lines.append(f"  • {t['content']}")
+        lines.append("")
+
+    if tasks["today"]:
+        lines.append("🟡 <b>СЕГОДНЯ:</b>\n")
+        for t in tasks["today"]:
+            lines.append(f"  • {t['content']}")
+
+    buttons = [[
+        {"text": "📋 Открыть KAIROS", "callback_data": "open_menu"},
+    ]]
+
+    tg_send("\n".join(lines), buttons)
 
 
-def refresh_message(chat_id, msg_id):
-    tasks = todoist_get_tasks()
-    if not tasks["overdue"] and not tasks["today"]:
-        tg_edit(chat_id, msg_id, "✅ <b>Все задачи выполнены!</b>\n\nТак держать 💪")
-    else:
-        text, buttons = build_task_message(tasks)
-        tg_edit(chat_id, msg_id, text, buttons)
+# --- Кеш проектов ---
+project_cache = {}
 
+def get_project_name(project_id):
+    global project_cache
+    if not project_cache:
+        try:
+            projects = todoist_get_projects()
+            project_cache = {p["id"]: p["name"] for p in projects}
+        except:
+            pass
+    return project_cache.get(project_id, "Проект")
+
+
+# --- Обработка ---
 
 def get_updates(offset=None):
     url = f"{TG_API}/getUpdates?timeout=30"
     if offset:
         url += f"&offset={offset}"
-    req = urllib.request.Request(url)
     try:
+        req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=35) as r:
             return json.loads(r.read())
     except:
@@ -195,38 +311,90 @@ def handle_update(update):
         chat_id = cb["message"]["chat"]["id"]
         msg_id = cb["message"]["message_id"]
 
-        if cb_data.startswith("done:"):
-            task_id = cb_data.split(":")[1]
+        if cb_data.startswith("project:"):
+            project_id = cb_data.split(":")[1]
+            tg_answer_callback(cb_id)
+            name = get_project_name(project_id)
+            send_project_tasks(chat_id, msg_id, project_id, name)
+
+        elif cb_data == "urgent":
+            tg_answer_callback(cb_id)
+            send_urgent(chat_id, msg_id)
+
+        elif cb_data == "back_menu" or cb_data == "open_menu":
+            tg_answer_callback(cb_id)
+            # Пересобираем меню в текущем сообщении
+            try:
+                projects = todoist_get_projects()
+                urgent = todoist_get_urgent_tasks()
+                urgent_count = len(urgent["overdue"]) + len(urgent["today"])
+            except:
+                projects = []
+                urgent_count = 0
+            lines = ["🧠 <b>KAIROS</b>\n"]
+            if urgent_count > 0:
+                lines.append(f"⚠️ <b>{urgent_count} срочных задач</b>\n")
+            else:
+                lines.append("✅ Нет срочных задач\n")
+            lines.append("Выбери проект:")
+            buttons = []
+            for p in projects:
+                emoji = PROJECT_EMOJI.get(p["name"], "📁")
+                buttons.append([{"text": f"{emoji} {p['name']}", "callback_data": f"project:{p['id']}"}])
+            buttons.append([
+                {"text": "🔥 Срочные", "callback_data": "urgent"},
+                {"text": "➕ Новая задача", "callback_data": "new_task"}
+            ])
+            tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
+
+        elif cb_data.startswith("done:"):
+            parts = cb_data.split(":")
+            task_id = parts[1]
+            source = parts[2] if len(parts) > 2 else ""
             try:
                 todoist_close(task_id)
                 tg_answer_callback(cb_id, "✅ Выполнено!")
-                refresh_message(chat_id, msg_id)
+                if source == "urgent":
+                    send_urgent(chat_id, msg_id)
+                elif source:
+                    name = get_project_name(source)
+                    send_project_tasks(chat_id, msg_id, source, name)
             except Exception as e:
                 tg_answer_callback(cb_id, f"Ошибка: {e}")
 
         elif cb_data == "new_task":
-            tg_answer_callback(cb_id, "")
-            tg_send(
-                "📝 <b>Напиши задачу:</b>\n\n"
-                "Просто отправь текст. Можно добавить дату:\n"
-                "<i>Купить молоко завтра</i>\n"
-                "<i>Сдать отчёт 2026-04-05</i>",
-                chat_id=chat_id
-            )
-            waiting_for_task[chat_id] = True
+            tg_answer_callback(cb_id)
+            # Выбор проекта для новой задачи
+            try:
+                projects = todoist_get_projects()
+            except:
+                projects = []
+            buttons = []
+            for p in projects:
+                emoji = PROJECT_EMOJI.get(p["name"], "📁")
+                buttons.append([{"text": f"{emoji} {p['name']}", "callback_data": f"new_in:{p['id']}:{p['name']}"}])
+            tg_edit(chat_id, msg_id, "📝 <b>В какой проект добавить?</b>", buttons)
 
-        elif cb_data == "refresh":
-            tg_answer_callback(cb_id, "🔄 Обновляю...")
-            refresh_message(chat_id, msg_id)
+        elif cb_data.startswith("new_in:"):
+            parts = cb_data.split(":", 2)
+            project_id = parts[1]
+            project_name = parts[2] if len(parts) > 2 else ""
+            tg_answer_callback(cb_id)
+            tg_send(f"📝 <b>Напиши задачу для {project_name}:</b>\n\n"
+                    f"Можно добавить дату:\n"
+                    f"<i>Купить молоко завтра</i>\n"
+                    f"<i>Сдать отчёт 2026-04-05</i>", chat_id=chat_id)
+            waiting_for_task[chat_id] = {"project_id": project_id, "project_name": project_name}
 
         elif cb_data.startswith("priority:"):
-            parts = cb_data.split(":", 3)
-            if len(parts) == 4:
-                _, task_text_encoded, due, level = parts
-                task_text = urllib.parse.unquote(task_text_encoded)
+            parts = cb_data.split(":", 4)
+            if len(parts) == 5:
+                _, task_encoded, due, level, proj_id = parts
+                task_text = urllib.parse.unquote(task_encoded)
                 due_date = due if due != "none" else None
+                proj = proj_id if proj_id != "none" else None
                 try:
-                    todoist_create(task_text, due_date, int(level))
+                    todoist_create(task_text, due_date, int(level), proj)
                     tg_answer_callback(cb_id, "✅ Задача создана!")
                     tg_edit(chat_id, msg_id, f"✅ <b>Создано:</b> {task_text}")
                 except Exception as e:
@@ -237,25 +405,18 @@ def handle_update(update):
         chat_id = msg["chat"]["id"]
         text = msg["text"].strip()
 
-        if text == "/start":
-            tg_send(
-                "🧠 <b>KAIROS запущен!</b>\n\n"
-                "Я напоминаю о задачах из Todoist каждый час.\n\n"
-                "Команды:\n"
-                "/tasks — показать задачи\n"
-                "/new — создать задачу",
-                chat_id=chat_id
-            )
+        if text == "/start" or text == "/menu":
+            send_main_menu(chat_id)
 
         elif text == "/tasks":
-            send_task_list()
+            send_main_menu(chat_id)
 
         elif text == "/new":
             tg_send("📝 <b>Напиши задачу:</b>", chat_id=chat_id)
-            waiting_for_task[chat_id] = True
+            waiting_for_task[chat_id] = {"project_id": None, "project_name": ""}
 
         elif chat_id in waiting_for_task:
-            del waiting_for_task[chat_id]
+            info = waiting_for_task.pop(chat_id)
             due_date = None
             task_text = text
 
@@ -275,27 +436,34 @@ def handle_update(update):
             if not task_text:
                 task_text = text
 
-            encoded = urllib.parse.quote(task_text)[:60]
+            encoded = urllib.parse.quote(task_text)[:50]
             d = due_date or "none"
+            proj = info.get("project_id") or "none"
             buttons = [[
-                {"text": "⚪️ Обычный", "callback_data": f"priority:{encoded}:{d}:1"},
-                {"text": "🟡 Средний", "callback_data": f"priority:{encoded}:{d}:2"},
+                {"text": "⚪️ Обычный", "callback_data": f"priority:{encoded}:{d}:1:{proj}"},
+                {"text": "🟡 Средний", "callback_data": f"priority:{encoded}:{d}:2:{proj}"},
             ], [
-                {"text": "🟠 Высокий", "callback_data": f"priority:{encoded}:{d}:3"},
-                {"text": "🔴 Срочный", "callback_data": f"priority:{encoded}:{d}:4"},
+                {"text": "🟠 Высокий", "callback_data": f"priority:{encoded}:{d}:3:{proj}"},
+                {"text": "🔴 Срочный", "callback_data": f"priority:{encoded}:{d}:4:{proj}"},
             ]]
 
+            proj_name = info.get("project_name", "")
+            proj_str = f" → {proj_name}" if proj_name else ""
             date_text = f" (до {due_date})" if due_date else ""
-            tg_send(
-                f"📋 <b>{task_text}</b>{date_text}\n\nВыбери приоритет:",
-                buttons, chat_id=chat_id
-            )
+            tg_send(f"📋 <b>{task_text}</b>{date_text}{proj_str}\n\nВыбери приоритет:",
+                    buttons, chat_id=chat_id)
 
 
 def main():
     print("🧠 KAIROS Bot запущен!")
     offset = None
     last_reminder = 0
+
+    # Отправляем меню при старте
+    try:
+        send_main_menu()
+    except Exception as e:
+        print(f"Start error: {e}")
 
     while True:
         try:
@@ -310,7 +478,7 @@ def main():
             if now - last_reminder >= REMINDER_INTERVAL and hour in REMINDER_HOURS:
                 last_reminder = now
                 try:
-                    send_task_list()
+                    send_reminder()
                 except Exception as e:
                     print(f"Reminder error: {e}")
 
