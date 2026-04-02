@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """KAIROS Bot — Telegram напоминалка с Todoist интеграцией
-Умные напоминания: 24ч → 6ч → 3ч → 1.5ч → 1ч → 30мин → 15мин до дедлайна"""
+Меню проектов + умные напоминания: 24ч → 6ч → 3ч → 1.5ч → 1ч → 30мин → 15мин"""
 
 import json
 import urllib.request
@@ -18,14 +18,12 @@ TODOIST_API = "https://api.todoist.com/api/v1"
 TG_API = f"https://api.telegram.org/bot{TG_BOT}"
 
 # Интервалы напоминаний (часы до дедлайна)
-REMIND_AT_HOURS = [24, 6, 3, 1.5, 1, 0.5, 0.25]  # 15мин = 0.25ч
+REMIND_AT_HOURS = [24, 6, 3, 1.5, 1, 0.5, 0.25]
 
-# Файл для трекинга отправленных напоминаний
 STATE_FILE = os.environ.get("STATE_FILE", "/tmp/reminder_state.json")
 
 
 def local_now():
-    """Текущее время в локальной зоне"""
     tz = timezone(timedelta(hours=TZ_OFFSET))
     return datetime.now(tz)
 
@@ -39,20 +37,20 @@ def load_state():
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(STATE_FILE) if os.path.dirname(STATE_FILE) else ".", exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
+
+# --- Telegram ---
 
 def tg_send(text, buttons=None, chat_id=TG_CHAT):
     data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if buttons:
         data["reply_markup"] = json.dumps({"inline_keyboard": buttons})
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/sendMessage", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/sendMessage", data=body,
+        headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read())
 
@@ -62,10 +60,8 @@ def tg_edit(chat_id, message_id, text, buttons=None):
     if buttons:
         data["reply_markup"] = json.dumps({"inline_keyboard": buttons})
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/editMessageText", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/editMessageText", data=body,
+        headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req) as r:
             return json.loads(r.read())
@@ -76,39 +72,58 @@ def tg_edit(chat_id, message_id, text, buttons=None):
 def tg_answer_callback(callback_id, text=""):
     data = {"callback_query_id": callback_id, "text": text}
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TG_API}/answerCallbackQuery", data=body,
-        headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(f"{TG_API}/answerCallbackQuery", data=body,
+        headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req)
     except:
         pass
 
 
-def todoist_get_all_tasks():
-    """Получить все незавершённые задачи с датами"""
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks",
-        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"}
-    )
+# --- Todoist ---
+
+def todoist_get_projects():
+    req = urllib.request.Request(f"{TODOIST_API}/projects",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
+    with urllib.request.urlopen(req) as r:
+        data = json.loads(r.read())
+    if isinstance(data, dict):
+        return data.get("results", [])
+    return data
+
+
+def todoist_get_tasks(project_id=None):
+    url = f"{TODOIST_API}/tasks"
+    if project_id:
+        url += f"?project_id={project_id}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
+    with urllib.request.urlopen(req) as r:
+        data = json.loads(r.read())
+    return data.get("results", [])
+
+
+def todoist_get_all_tasks_with_time():
+    """Все задачи с расчётом времени до дедлайна"""
+    req = urllib.request.Request(f"{TODOIST_API}/tasks",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
     with urllib.request.urlopen(req) as r:
         data = json.loads(r.read())
 
     tasks = data.get("results", [])
-    result = []
     now = local_now()
-    today = now.date()
+    result = []
 
     for t in tasks:
-        due = t.get("due")
-        if not due or t.get("is_completed"):
+        if t.get("is_completed"):
             continue
-        due_date_str = due.get("date", "")
+        due = t.get("due")
+        if not due:
+            continue
+
         due_datetime_str = due.get("datetime", "")
+        due_date_str = due.get("date", "")
 
         if due_datetime_str:
-            # Задача с точным временем
             try:
                 dt = datetime.fromisoformat(due_datetime_str)
                 if dt.tzinfo is None:
@@ -116,7 +131,6 @@ def todoist_get_all_tasks():
             except:
                 continue
         elif due_date_str:
-            # Задача только с датой — дедлайн = конец дня (23:59)
             try:
                 d = date.fromisoformat(due_date_str)
                 tz = timezone(timedelta(hours=TZ_OFFSET))
@@ -127,60 +141,56 @@ def todoist_get_all_tasks():
             continue
 
         hours_left = (dt - now).total_seconds() / 3600
-        is_overdue = hours_left < 0
-
         result.append({
             "id": t["id"],
             "content": t["content"],
             "priority": t.get("priority", 1),
-            "due_dt": dt,
+            "project_id": t.get("project_id", ""),
             "hours_left": hours_left,
-            "is_overdue": is_overdue,
+            "is_overdue": hours_left < 0,
             "due_date": due_date_str,
         })
 
     return result
 
 
-def todoist_get_tasks():
-    """Совместимость — overdue/today"""
-    all_tasks = todoist_get_all_tasks()
-    today = local_now().date()
+def todoist_get_urgent_tasks():
+    today = str(date.today())
+    all_tasks = todoist_get_tasks()
     result = {"overdue": [], "today": []}
     for t in all_tasks:
-        d = date.fromisoformat(t["due_date"]) if t["due_date"] else None
-        if t["is_overdue"] and d and d < today:
-            result["overdue"].append(t)
-        elif d and d == today:
-            result["today"].append(t)
-        elif t["is_overdue"]:
-            result["overdue"].append(t)
+        due = t.get("due")
+        if due and due.get("date") and not t.get("is_completed"):
+            d = due["date"]
+            item = {"id": t["id"], "content": t["content"],
+                    "priority": t.get("priority", 1), "project_id": t.get("project_id", "")}
+            if d < today:
+                result["overdue"].append(item)
+            elif d == today:
+                result["today"].append(item)
     return result
 
 
 def todoist_close(task_id):
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks/{task_id}/close", method="POST",
-        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"}
-    )
+    req = urllib.request.Request(f"{TODOIST_API}/tasks/{task_id}/close", method="POST",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}"})
     urllib.request.urlopen(req)
 
 
-def todoist_create(content, due_date=None, priority=1):
+def todoist_create(content, due_date=None, priority=1, project_id=None):
     data = {"content": content, "priority": priority}
     if due_date:
         data["due_date"] = due_date
+    if project_id:
+        data["project_id"] = project_id
     body = json.dumps(data).encode()
-    req = urllib.request.Request(
-        f"{TODOIST_API}/tasks", data=body, method="POST",
-        headers={
-            "Authorization": f"Bearer {TODOIST_TOKEN}",
-            "Content-Type": "application/json"
-        }
-    )
+    req = urllib.request.Request(f"{TODOIST_API}/tasks", data=body, method="POST",
+        headers={"Authorization": f"Bearer {TODOIST_TOKEN}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req) as r:
         return json.loads(r.read())
 
+
+# --- Helpers ---
 
 def format_time_left(hours):
     if hours <= 0:
@@ -195,58 +205,207 @@ def format_time_left(hours):
     return f"{days}д"
 
 
-def get_remind_label(hours_left):
-    """Какой порог сработал"""
-    for threshold in REMIND_AT_HOURS:
-        if hours_left <= threshold:
-            return threshold
-    return None
+# Кеш проектов
+project_cache = {}
 
+def get_project_name(project_id):
+    global project_cache
+    if not project_cache:
+        try:
+            projects = todoist_get_projects()
+            project_cache = {p["id"]: p["name"] for p in projects}
+        except:
+            pass
+    return project_cache.get(project_id, "Проект")
+
+
+# --- Главное меню ---
+
+def send_main_menu(chat_id=TG_CHAT):
+    try:
+        projects = todoist_get_projects()
+        urgent = todoist_get_urgent_tasks()
+        urgent_count = len(urgent["overdue"]) + len(urgent["today"])
+    except:
+        projects = []
+        urgent_count = 0
+
+    lines = ["<b>KAIROS</b>\n"]
+    if urgent_count > 0:
+        lines.append(f"{urgent_count} срочных задач\n")
+    else:
+        lines.append("Нет срочных задач\n")
+    lines.append("Выбери проект:")
+
+    buttons = []
+    for p in projects:
+        buttons.append([{"text": p["name"], "callback_data": f"project:{p['id']}"}])
+
+    buttons.append([
+        {"text": "🔥 Срочные", "callback_data": "urgent"},
+        {"text": "➕ Новая задача", "callback_data": "new_task"}
+    ])
+
+    tg_send("\n".join(lines), buttons, chat_id)
+
+
+def build_menu_edit(chat_id, msg_id):
+    try:
+        projects = todoist_get_projects()
+        urgent = todoist_get_urgent_tasks()
+        urgent_count = len(urgent["overdue"]) + len(urgent["today"])
+    except:
+        projects = []
+        urgent_count = 0
+
+    lines = ["<b>KAIROS</b>\n"]
+    if urgent_count > 0:
+        lines.append(f"{urgent_count} срочных задач\n")
+    else:
+        lines.append("Нет срочных задач\n")
+    lines.append("Выбери проект:")
+
+    buttons = []
+    for p in projects:
+        buttons.append([{"text": p["name"], "callback_data": f"project:{p['id']}"}])
+
+    buttons.append([
+        {"text": "🔥 Срочные", "callback_data": "urgent"},
+        {"text": "➕ Новая задача", "callback_data": "new_task"}
+    ])
+
+    tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
+
+
+# --- Задачи проекта ---
+
+def send_project_tasks(chat_id, msg_id, project_id, project_name=""):
+    try:
+        all_tasks = todoist_get_tasks(project_id)
+    except Exception as e:
+        tg_edit(chat_id, msg_id, f"Ошибка: {e}")
+        return
+
+    tasks = [t for t in all_tasks if not t.get("is_completed")]
+    lines = [f"<b>{project_name}</b>\n"]
+    buttons = []
+
+    if not tasks:
+        lines.append("Задач нет")
+    else:
+        for t in tasks:
+            due = t.get("due")
+            date_str = ""
+            if due and due.get("date"):
+                d = due["date"]
+                today = str(date.today())
+                if d < today:
+                    date_str = " (просрочено)"
+                elif d == today:
+                    date_str = " (сегодня)"
+                else:
+                    date_str = f" (до {d})"
+            lines.append(f"  — {t['content']}{date_str}")
+            buttons.append([
+                {"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}:{project_id}"}
+            ])
+
+    buttons.append([
+        {"text": f"➕ Добавить в {project_name}", "callback_data": f"new_in:{project_id}:{project_name}"},
+    ])
+    buttons.append([
+        {"text": "Назад", "callback_data": "back_menu"},
+        {"text": "Обновить", "callback_data": f"project:{project_id}"}
+    ])
+
+    tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
+
+
+# --- Срочные ---
+
+def send_urgent(chat_id, msg_id):
+    try:
+        tasks = todoist_get_urgent_tasks()
+        projects = {p["id"]: p["name"] for p in todoist_get_projects()}
+    except Exception as e:
+        tg_edit(chat_id, msg_id, f"Ошибка: {e}")
+        return
+
+    lines = ["🔥 <b>Срочные задачи</b>\n"]
+    buttons = []
+
+    if tasks["overdue"]:
+        lines.append("<b>Просрочено:</b>\n")
+        for t in tasks["overdue"]:
+            proj = projects.get(t["project_id"], "")
+            proj_str = f" [{proj}]" if proj else ""
+            lines.append(f"  — {t['content']}{proj_str}")
+            buttons.append([{"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
+        lines.append("")
+
+    if tasks["today"]:
+        lines.append("<b>Сегодня:</b>\n")
+        for t in tasks["today"]:
+            proj = projects.get(t["project_id"], "")
+            proj_str = f" [{proj}]" if proj else ""
+            lines.append(f"  — {t['content']}{proj_str}")
+            buttons.append([{"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
+
+    if not tasks["overdue"] and not tasks["today"]:
+        lines.append("Всё выполнено")
+
+    buttons.append([
+        {"text": "Назад", "callback_data": "back_menu"},
+        {"text": "Обновить", "callback_data": "urgent"}
+    ])
+
+    tg_edit(chat_id, msg_id, "\n".join(lines), buttons)
+
+
+# --- Умные напоминания ---
 
 def check_and_send_reminders():
-    """Умные напоминания — отправляем по порогам"""
     state = load_state()
-    all_tasks = todoist_get_all_tasks()
     now = local_now()
     hour = now.hour
 
-    # Тихие часы: 23:00 — 08:00
     if hour < 8 or hour >= 23:
         return
 
+    all_tasks = todoist_get_all_tasks_with_time()
     sent_any = False
+
     for t in all_tasks:
         task_id = t["id"]
         hours_left = t["hours_left"]
 
         if t["is_overdue"] and hours_left < -48:
-            continue  # Давно просрочено, не спамим
+            continue
 
-        threshold = get_remind_label(hours_left)
-        if threshold is None and not t["is_overdue"]:
-            continue  # Ещё далеко
-
-        # Ключ: task_id + порог
+        # Определяем порог
+        threshold = None
         if t["is_overdue"]:
             state_key = f"{task_id}:overdue"
         else:
+            for th in REMIND_AT_HOURS:
+                if hours_left <= th:
+                    threshold = th
+                    break
+            if threshold is None:
+                continue
             state_key = f"{task_id}:{threshold}"
 
-        # Уже отправляли это напоминание?
         if state_key in state:
             continue
 
-        # Формируем сообщение
+        # Сообщение
         if t["is_overdue"]:
-            urgency = "ПРОСРОЧЕНО"
-            text = f"<b>KAIROS</b>\n\n{urgency}: <b>{t['content']}</b>"
+            text = f"<b>KAIROS</b>\n\nПросрочено: <b>{t['content']}</b>"
         else:
             time_str = format_time_left(hours_left)
             text = f"<b>KAIROS</b>\n\nОсталось {time_str}: <b>{t['content']}</b>"
 
-        buttons = [[
-            {"text": f"Done", "callback_data": f"done:{task_id}"},
-        ]]
+        buttons = [[{"text": "Done", "callback_data": f"done:{task_id}:reminder"}]]
 
         try:
             tg_send(text, buttons)
@@ -258,86 +417,20 @@ def check_and_send_reminders():
     if sent_any:
         save_state(state)
 
-    # Очистка старых записей (>7 дней)
+    # Чистка старых записей
     cutoff = int(now.timestamp()) - 7 * 86400
-    state = {k: v for k, v in state.items() if isinstance(v, int) and v > cutoff}
-    save_state(state)
+    cleaned = {k: v for k, v in state.items() if isinstance(v, int) and v > cutoff}
+    save_state(cleaned)
 
 
-def build_task_message(tasks):
-    lines = ["<b>KAIROS</b>\n"]
-    buttons = []
-
-    if tasks["overdue"]:
-        lines.append("<b>Просрочено:</b>\n")
-        for i, t in enumerate(tasks["overdue"], 1):
-            lines.append(f"  {i}. {t['content']}")
-            buttons.append([
-                {"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}"}
-            ])
-        lines.append("")
-
-    if tasks["today"]:
-        lines.append("<b>Сегодня:</b>\n")
-        start = len(tasks["overdue"]) + 1
-        for i, t in enumerate(tasks["today"], start):
-            time_str = format_time_left(t.get("hours_left", 0))
-            lines.append(f"  {i}. {t['content']} — {time_str}")
-            buttons.append([
-                {"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}"}
-            ])
-
-    buttons.append([
-        {"text": "🔥 Срочные", "callback_data": "urgent"},
-        {"text": "➕ Новая задача", "callback_data": "new_task"},
-    ])
-
-    return "\n".join(lines), buttons
-
-
-def send_task_list(chat_id=None):
-    tasks = todoist_get_tasks()
-    if not tasks["overdue"] and not tasks["today"]:
-        tg_send("Все задачи выполнены", chat_id=chat_id or TG_CHAT)
-        return
-    text, buttons = build_task_message(tasks)
-    tg_send(text, buttons, chat_id=chat_id or TG_CHAT)
-
-
-def send_urgent(chat_id=None):
-    all_tasks = todoist_get_all_tasks()
-    urgent = [t for t in all_tasks if t["is_overdue"] or t["hours_left"] < 6]
-    if not urgent:
-        tg_send("Срочных задач нет", chat_id=chat_id or TG_CHAT)
-        return
-
-    lines = ["<b>KAIROS</b>\n\n🔥 <b>Срочные:</b>\n"]
-    buttons = []
-    for i, t in enumerate(urgent, 1):
-        time_str = format_time_left(t["hours_left"])
-        lines.append(f"  {i}. {t['content']} — {time_str}")
-        buttons.append([
-            {"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}"}
-        ])
-
-    tg_send("\n".join(lines), buttons, chat_id=chat_id or TG_CHAT)
-
-
-def refresh_message(chat_id, msg_id):
-    tasks = todoist_get_tasks()
-    if not tasks["overdue"] and not tasks["today"]:
-        tg_edit(chat_id, msg_id, "Все задачи выполнены")
-    else:
-        text, buttons = build_task_message(tasks)
-        tg_edit(chat_id, msg_id, text, buttons)
-
+# --- Обработка ---
 
 def get_updates(offset=None):
     url = f"{TG_API}/getUpdates?timeout=30"
     if offset:
         url += f"&offset={offset}"
-    req = urllib.request.Request(url)
     try:
+        req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=35) as r:
             return json.loads(r.read())
     except:
@@ -357,40 +450,71 @@ def handle_update(update):
         chat_id = cb["message"]["chat"]["id"]
         msg_id = cb["message"]["message_id"]
 
-        if cb_data.startswith("done:"):
-            task_id = cb_data.split(":")[1]
+        if cb_data.startswith("project:"):
+            project_id = cb_data.split(":")[1]
+            tg_answer_callback(cb_id)
+            name = get_project_name(project_id)
+            send_project_tasks(chat_id, msg_id, project_id, name)
+
+        elif cb_data == "urgent":
+            tg_answer_callback(cb_id)
+            send_urgent(chat_id, msg_id)
+
+        elif cb_data in ("back_menu", "open_menu"):
+            tg_answer_callback(cb_id)
+            build_menu_edit(chat_id, msg_id)
+
+        elif cb_data.startswith("done:"):
+            parts = cb_data.split(":")
+            task_id = parts[1]
+            source = parts[2] if len(parts) > 2 else ""
             try:
                 todoist_close(task_id)
                 tg_answer_callback(cb_id, "Выполнено")
-                refresh_message(chat_id, msg_id)
-                # Очистить напоминания для этой задачи
+                # Очистить state напоминаний
                 state = load_state()
                 state = {k: v for k, v in state.items() if not k.startswith(f"{task_id}:")}
                 save_state(state)
+                # Обновить UI
+                if source == "urgent":
+                    send_urgent(chat_id, msg_id)
+                elif source == "reminder":
+                    tg_edit(chat_id, msg_id, f"Done")
+                elif source:
+                    name = get_project_name(source)
+                    send_project_tasks(chat_id, msg_id, source, name)
             except Exception as e:
                 tg_answer_callback(cb_id, f"Ошибка: {e}")
 
         elif cb_data == "new_task":
-            tg_answer_callback(cb_id, "")
-            tg_send("Напиши задачу:\n\n<i>Текст + дата (завтра / сегодня / 2026-04-05)</i>", chat_id=chat_id)
-            waiting_for_task[chat_id] = True
+            tg_answer_callback(cb_id)
+            try:
+                projects = todoist_get_projects()
+            except:
+                projects = []
+            buttons = []
+            for p in projects:
+                buttons.append([{"text": p["name"], "callback_data": f"new_in:{p['id']}:{p['name']}"}])
+            tg_edit(chat_id, msg_id, "<b>В какой проект добавить?</b>", buttons)
 
-        elif cb_data == "refresh":
-            tg_answer_callback(cb_id, "Обновляю...")
-            refresh_message(chat_id, msg_id)
-
-        elif cb_data == "urgent":
-            tg_answer_callback(cb_id, "")
-            send_urgent(chat_id)
+        elif cb_data.startswith("new_in:"):
+            parts = cb_data.split(":", 2)
+            project_id = parts[1]
+            project_name = parts[2] if len(parts) > 2 else ""
+            tg_answer_callback(cb_id)
+            tg_send(f"Напиши задачу для <b>{project_name}</b>:\n\n"
+                    f"<i>Текст + дата (завтра / сегодня / 2026-04-05)</i>", chat_id=chat_id)
+            waiting_for_task[chat_id] = {"project_id": project_id, "project_name": project_name}
 
         elif cb_data.startswith("priority:"):
-            parts = cb_data.split(":", 3)
-            if len(parts) == 4:
-                _, task_text_encoded, due, level = parts
-                task_text = urllib.parse.unquote(task_text_encoded)
+            parts = cb_data.split(":", 4)
+            if len(parts) == 5:
+                _, task_encoded, due, level, proj_id = parts
+                task_text = urllib.parse.unquote(task_encoded)
                 due_date = due if due != "none" else None
+                proj = proj_id if proj_id != "none" else None
                 try:
-                    todoist_create(task_text, due_date, int(level))
+                    todoist_create(task_text, due_date, int(level), proj)
                     tg_answer_callback(cb_id, "Задача создана")
                     tg_edit(chat_id, msg_id, f"Создано: <b>{task_text}</b>")
                 except Exception as e:
@@ -401,29 +525,35 @@ def handle_update(update):
         chat_id = msg["chat"]["id"]
         text = msg["text"].strip()
 
-        if text == "/start":
-            tg_send(
-                "<b>KAIROS</b>\n\n"
-                "Напоминаю о задачах из Todoist.\n"
-                "Уведомления: 24ч, 6ч, 3ч, 1.5ч, 1ч, 30мин, 15мин до дедлайна.\n\n"
-                "/tasks — все задачи\n"
-                "/urgent — срочные\n"
-                "/new — создать задачу",
-                chat_id=chat_id
-            )
-
-        elif text == "/tasks":
-            send_task_list(chat_id)
+        if text in ("/start", "/menu", "/tasks"):
+            send_main_menu(chat_id)
 
         elif text == "/urgent":
-            send_urgent(chat_id)
+            # Отправляем как новое сообщение
+            tasks = todoist_get_urgent_tasks()
+            lines = ["🔥 <b>Срочные задачи</b>\n"]
+            buttons = []
+            if tasks["overdue"]:
+                lines.append("<b>Просрочено:</b>\n")
+                for t in tasks["overdue"]:
+                    lines.append(f"  — {t['content']}")
+                    buttons.append([{"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
+            if tasks["today"]:
+                lines.append("<b>Сегодня:</b>\n")
+                for t in tasks["today"]:
+                    lines.append(f"  — {t['content']}")
+                    buttons.append([{"text": f"Done: {t['content'][:30]}", "callback_data": f"done:{t['id']}:urgent"}])
+            if not tasks["overdue"] and not tasks["today"]:
+                lines.append("Всё выполнено")
+            buttons.append([{"text": "Открыть KAIROS", "callback_data": "open_menu"}])
+            tg_send("\n".join(lines), buttons, chat_id)
 
         elif text == "/new":
             tg_send("Напиши задачу:", chat_id=chat_id)
-            waiting_for_task[chat_id] = True
+            waiting_for_task[chat_id] = {"project_id": None, "project_name": ""}
 
         elif chat_id in waiting_for_task:
-            del waiting_for_task[chat_id]
+            info = waiting_for_task.pop(chat_id)
             due_date = None
             task_text = text
 
@@ -443,21 +573,22 @@ def handle_update(update):
             if not task_text:
                 task_text = text
 
-            encoded = urllib.parse.quote(task_text)[:60]
+            encoded = urllib.parse.quote(task_text)[:50]
             d = due_date or "none"
+            proj = info.get("project_id") or "none"
             buttons = [[
-                {"text": "Обычный", "callback_data": f"priority:{encoded}:{d}:1"},
-                {"text": "Средний", "callback_data": f"priority:{encoded}:{d}:2"},
+                {"text": "Обычный", "callback_data": f"priority:{encoded}:{d}:1:{proj}"},
+                {"text": "Средний", "callback_data": f"priority:{encoded}:{d}:2:{proj}"},
             ], [
-                {"text": "Высокий", "callback_data": f"priority:{encoded}:{d}:3"},
-                {"text": "Срочный", "callback_data": f"priority:{encoded}:{d}:4"},
+                {"text": "Высокий", "callback_data": f"priority:{encoded}:{d}:3:{proj}"},
+                {"text": "Срочный", "callback_data": f"priority:{encoded}:{d}:4:{proj}"},
             ]]
 
+            proj_name = info.get("project_name", "")
+            proj_str = f" → {proj_name}" if proj_name else ""
             date_text = f" (до {due_date})" if due_date else ""
-            tg_send(
-                f"<b>{task_text}</b>{date_text}\n\nПриоритет:",
-                buttons, chat_id=chat_id
-            )
+            tg_send(f"<b>{task_text}</b>{date_text}{proj_str}\n\nПриоритет:",
+                    buttons, chat_id=chat_id)
 
 
 def main():
@@ -467,7 +598,6 @@ def main():
 
     while True:
         try:
-            # Обработка обновлений
             updates = get_updates(offset)
             if updates.get("ok"):
                 for u in updates["result"]:
