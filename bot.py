@@ -239,7 +239,8 @@ def send_main_menu(chat_id=TG_CHAT):
 
     buttons = []
     for p in projects:
-        buttons.append([{"text": p["name"], "callback_data": f"project:{p['id']}"}])
+        name = f"📥 {p['name']}" if p["name"] == "Inbox" else p["name"]
+        buttons.append([{"text": name, "callback_data": f"project:{p['id']}"}])
 
     buttons.append([
         {"text": "🔥 Срочные", "callback_data": "urgent"},
@@ -267,7 +268,8 @@ def build_menu_edit(chat_id, msg_id):
 
     buttons = []
     for p in projects:
-        buttons.append([{"text": p["name"], "callback_data": f"project:{p['id']}"}])
+        name = f"📥 {p['name']}" if p["name"] == "Inbox" else p["name"]
+        buttons.append([{"text": name, "callback_data": f"project:{p['id']}"}])
 
     buttons.append([
         {"text": "🔥 Срочные", "callback_data": "urgent"},
