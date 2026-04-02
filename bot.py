@@ -18,7 +18,7 @@ TODOIST_API = "https://api.todoist.com/api/v1"
 TG_API = f"https://api.telegram.org/bot{TG_BOT}"
 
 # Интервалы напоминаний (часы до дедлайна)
-REMIND_AT_HOURS = [24, 6, 3, 1.5, 1, 0.5, 0.25]
+REMIND_AT_HOURS = [24, 12, 6, 3, 1.5, 1, 0.5, 0.25]
 
 STATE_FILE = os.environ.get("STATE_FILE", "/tmp/reminder_state.json")
 
